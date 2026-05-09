@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>西海电竞后台管理</title>
+    <style>
+        * {margin: 0;padding: 0;box-sizing: border-box;user-select: none;}
+        body {background: #000;color: #fff;font-family: "Microsoft YaHei",sans-serif;padding: 20px;}
+        h2 {color: #ff4dff;margin-bottom: 20px;}
+        .back-btn {background: #ff4dff;color: #000;border: none;padding: 8px 16px;border-radius: 6px;margin: 5px;cursor: pointer;}
+        .back-btn.danger {background: #ff3333;}
+        .back-btn.success {background: #33ff33;}
+        .back-panel {background: #1a1a1a;padding: 15px;border-radius: 10px;margin: 15px 0;}
+        .user-item {padding: 12px;border-bottom: 1px solid #333;margin: 8px 0;display: flex;align-items: center;flex-wrap: wrap;gap: 10px;}
+        .user-item span {min-width: 120px;}
+        input {background: #222;border: none;padding: 8px;border-radius: 6px;color: white;width: 100px;margin: 0 5px;}
+        .chat-box {background: #111;padding: 10px;border-radius: 8px;height: 200px;overflow-y: auto;margin: 10px 0;}
+        .chat-msg {padding: 5px;margin: 5px 0;border-radius: 4px;}
+        .chat-msg.admin {background: #ff4dff;color: #000;}
+        .chat-msg.user {background: #333;}
+        .login-tip {color:#999;margin-bottom:10px;}
+    </style>
+</head>
+<body>
+    <h2>西海电竞 后台管理系统</h2>
+    <div class="back-panel" id="loginPanel">
+        <div class="login-tip">请输入后台管理密码进入系统</div>
+        <input type="password" id="adminPwd" placeholder="请输入后台密码">
+        <button class="back-btn" onclick="adminLogin()">登录后台</button>
+    </div>
+
+    <div id="mainPanel" style="display:none;">
+        <div class="back-panel">
+            <h3>快捷操作</h3>
+            <button class="back-btn" onclick="backendRefreshAll()">🔄 刷新全部</button>
+            <button class="back-btn" onclick="backendSendSysMsg()">📢 下发系统消息</button>
+        </div>
+
+        <div class="back-panel">
+            <h3>账号管理（余额增减/封禁解封）</h3>
+            <div id="userList"></div>
+        </div>
+
+        <div class="back-panel">
+            <h3>官方客服聊天（与前台互通）</h3>
+            <div class="chat-box" id="adminChatBox"></div>
+            <input type="text" id="adminChatInput" placeholder="输入客服消息">
+            <button class="back-btn" onclick="adminSendChat()">发送</button>
+        </div>
+
+        <div class="back-panel">
+            <h3>全部订单列表</h3>
+            <div id="backendOrderList">暂无订单</div>
+        </div>
+    </div>
+
+<script>
+    // 后台密码隐藏写在代码内部，页面不显示
+    const ADMIN_PWD = "czx是格调";
+    let allUsers = {};
+    let orders = [];
+    let chatHistory = [];
+
+    function init() {
+        let storedUsers = localStorage.getItem("xihai_user");
+        let storedOrders = localStorage.getItem("syncOrder");
+        let storedChat = localStorage.getItem("chatHistory");
+        if (storedUsers) allUsers = JSON.parse(storedUsers);
+        if (storedOrders) orders = JSON.parse(storedOrders);
+        if (storedChat) chatHistory = JSON.parse(storedChat);
+        renderUserList();
+        renderOrders();
+        renderChat();
+        window.addEventListener("storage", (e) => {
+            if (e.key === "currentUser" || e.key === "syncOrder" || e.key === "chatHistory") {
+                init();
+            }
+        });
+    }
+
+    function adminLogin() {
+        let pwd = document.getElementById("adminPwd").value.trim();
+        if (pwd !== ADMIN_PWD) return alert("密码错误！");
+        document.getElementById("loginPanel").style.display = "none";
+        document.getElementById("mainPanel").style.display = "block";
+        init();
+    }
+
+    // 渲染用户列表：隐藏用户密码，不展示
+    function renderUserList() {
+        let container = document.getElementById("userList");
+        if (Object.keys(allUsers).length === 0) return container.innerHTML = "暂无注册账号";
+        let html = "";
+        for (let user in allUsers) {
+            let u = allUsers[user];
+            let isBanned = u.isBanned || false;
+            let banDays = u.banDays || 0;
+            let balance = u.balance || 0;
+            let hasActiveOrder = orders.some(o => o.username === user && (o.status === "pending" || o.status === "serving"));
+            // 去掉密码展示，只显示账号、余额、状态
+            html += `
+                <div class="user-item">
+                    <span>账号：${user}</span>
+                    <span>余额：${balance} 西海币</span>
+                    <span>状态：${isBanned ? `<span style="color:red">封禁中(${banDays}天)</span>` : `<span style="color:green">正常</span>`}</span>
+                    <span>点单：${hasActiveOrder ? "有进行中" : "无"}</span>
+                    <input type="number" placeholder="增减数量" id="num_${user}" min="1">
+                    <button class="back-btn success" onclick="addBalance('${user}')">增加西海币</button>
+                    <button class="back-btn danger" onclick="subBalance('${user}')">减少西海币</button>
+                    <button class="back-btn danger" onclick="banUser('${user}')">封禁账号</button>
+                    <button class="back-btn success" onclick="unbanUser('${user}')">解封账号</button>
+                </div>
+            `;
+        }
+        container.innerHTML = html;
+    }
+
+    function addBalance(username) {
+        let num = parseInt(document.getElementById(`num_${username}`).value);
+        if (!num || num < 1) return alert("请输入有效数量！");
+        allUsers[username].balance += num;
+        saveUsers();
+        addSysMsg(username, `西海币下发：+${num}，当前余额：${allUsers[username].balance}`);
+        alert(`成功给 ${username} 增加 ${num} 西海币`);
+        renderUserList();
+    }
+
+    function subBalance(username) {
+        let num = parseInt(document.getElementById(`num_${username}`).value);
+        if (!num || num < 1) return alert("请输入有效数量！");
+        if (allUsers[username].balance < num) return alert("余额不足，无法减少！");
+        allUsers[username].balance -= num;
+        saveUsers();
+        addSysMsg(username, `西海币扣除：-${num}，当前余额：${allUsers[username].balance}`);
+        alert(`成功给 ${username} 减少 ${num} 西海币`);
+        renderUserList();
+    }
+
+    function banUser(username) {
+        let days = prompt("请输入封禁天数（默认1天）：", "1");
+        days = parseInt(days) || 1;
+        allUsers[username].isBanned = true;
+        allUsers[username].banDays = days;
+        saveUsers();
+        addSysMsg(username, `账号已被封禁 ${days} 天，无法下单/充值`);
+        alert(`成功封禁 ${username} ${days} 天`);
+        renderUserList();
+    }
+
+    function unbanUser(username) {
+        allUsers[username].isBanned = false;
+        allUsers[username].banDays = 0;
+        saveUsers();
+        addSysMsg(username, "账号已解封，恢复下单/充值功能");
+        alert(`成功解封 ${username}`);
+        renderUserList();
+    }
+
+    function backendSendSysMsg() {
+        let username = prompt("请输入目标账号（留空群发）：");
+        let content = prompt("请输入系统消息内容：");
+        if (!content) return;
+        addSysMsg(username || "all", content);
+        alert("系统消息已下发，前台实时接收");
+    }
+    function addSysMsg(username, content) {
+        let sysMsg = JSON.parse(localStorage.getItem("sysMsgList")) || [];
+        sysMsg.push({ username, content, time: new Date().toLocaleString() });
+        localStorage.setItem("sysMsgList", JSON.stringify(sysMsg));
+    }
+
+    function adminSendChat() {
+        let input = document.getElementById("adminChatInput");
+        let msg = input.value.trim();
+        if (!msg) return;
+        chatHistory.push({ role: "admin", content: msg, time: new Date().toLocaleString() });
+        localStorage.setItem("chatHistory", JSON.stringify(chatHistory));
+        input.value = "";
+        renderChat();
+    }
+    function renderChat() {
+        let container = document.getElementById("adminChatBox");
+        container.innerHTML = chatHistory.map(m => `
+            <div class="chat-msg ${m.role === "admin" ? "admin" : "user"}">
+                ${m.role === "admin" ? "客服" : "用户"}：${m.content}
+            </div>
+        `).join("");
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function backendRefreshAll() {
+        init();
+        localStorage.setItem("refreshAll", "1");
+        setTimeout(() => localStorage.removeItem("refreshAll"), 100);
+        alert("已刷新所有账号/订单/聊天数据");
+    }
+
+    function saveUsers() {
+        localStorage.setItem("xihai_user", JSON.stringify(allUsers));
+    }
+
+    function renderOrders() {
+        let container = document.getElementById("backendOrderList");
+        if (orders.length === 0) return container.innerHTML = "暂无订单";
+        container.innerHTML = orders.map(o => `
+            <div class="user-item">
+                账号：${o.username || "未知"} | 商品：${o.productName} | 金额：${o.price} | 状态：${o.status} | 时间：${o.orderTime}
+            </div>
+        `).join("");
+    }
+</script>
+</body>
+</html>
